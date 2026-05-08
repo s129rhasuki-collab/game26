@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>ミッフィー・ぷにぷにサバイバル</title>
+    <style>
+        body { margin: 0; overflow: hidden; background: #eceff1; font-family: 'Arial', sans-serif; touch-action: none; }
+        #ui { position: absolute; top: 20px; width: 100%; text-align: center; color: #37474f; pointer-events: none; z-index: 10; }
+        #score { font-size: 50px; font-weight: bold; }
+        #gameover { 
+            display: none; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+            background: rgba(255,255,255,0.95); padding: 30px; border-radius: 20px; text-align: center;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.3); z-index: 100; border: 5px solid #ffab91;
+        }
+        button { padding: 12px 24px; font-size: 20px; cursor: pointer; border: none; background: #ffab91; color: white; border-radius: 10px; font-weight: bold; }
+    </style>
+</head>
+<body>
+    <div id="ui">
+        <div id="score">0</div>
+        <div style="font-size: 14px;">グレーは鉄(重い！)、オレンジは爆弾！</div>
+    </div>
+    <div id="gameover">
+        <h1>あふれちゃった！</h1>
+        <p id="final-score"></p>
+        <button onclick="location.reload()">リトライ</button>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/matter-js/0.19.0/matter.min.js"></script>
+
+    <script>
+        const WORLD_W = 400;
+        const WORLD_H = 700;
+        const BOX_TOP = 200; 
+        // 0-3:通常, 4:鉄(Iron), 5:爆弾(Bomb)
+        const COLORS = [0xFFF9C4, 0xF8BBD0, 0xB3E5FC, 0xC8E6C9, 0x78909C, 0xFF7043];
+        
+        let score = 0;
+        let isGameOver = false;
+        let currentMiffy = null;
+        let miffies = [];
+        let canInput = true;
+
+        const engine = Matter.Engine.create();
+        const world = engine.world;
+        
+        const ground = Matter.Bodies.rectangle(200, WORLD_H, 320, 40, { isStatic: true, friction: 0.5 });
+        const leftWall = Matter.Bodies.rectangle(40, 450, 20, 500, { isStatic: true, friction: 0.5 });
+        const rightWall = Matter.Bodies.rectangle(360, 450, 20, 500, { isStatic: true, friction: 0.5 });
+        Matter.Composite.add(world, [ground, leftWall, rightWall]);
+
+        const scene = new THREE.Scene();
+        const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 2000);
+        const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        document.body.appendChild(renderer.domElement);
+
+        const light = new THREE.DirectionalLight(0xffffff, 1);
+        light.position.set(200, 600, 300);
+        scene.add(light, new THREE.AmbientLight(0xffffff, 0.6));
+        camera.position.set(200, 400, 650);
+        camera.lookAt(200, 350, 0);
+
+        // 箱
+        const boxGeo = new THREE.BoxGeometry(320, 500, 100);
+        const boxMat = new THREE.MeshPhongMaterial({ color: 0xffffff, transparent: true, opacity: 0.1, side: THREE.BackSide });
+        const boxV = new THREE.Mesh(boxGeo, boxMat);
+        boxV.position.set(200, WORLD_H - 250 - 20, -10);
+        scene.add(boxV);
+
+        // 赤い線
+        const lineGeo = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(40, WORLD_H - BOX_TOP, 10), new THREE.Vector3(360, WORLD_H - BOX_TOP, 10)]);
+        scene.add(new THREE.Line(lineGeo, new THREE.LineBasicMaterial({ color: 0xff0000 })));
+
+        function createMiffyModel(type) {
+            const group = new THREE.Group();
+            const mat = new THREE.MeshPhongMaterial({ color: COLORS[type] });
+            const face = new THREE.Mesh(new THREE.SphereGeometry(30, 24, 24), mat);
+            face.scale.y = 0.85; group.add(face);
+            
+            const earGeo = new THREE.SphereGeometry(10, 12, 12);
+            const el = new THREE.Mesh(earGeo, mat); el.position.set(-12, 35, 0); el.scale.set(1, 2.5, 0.8); group.add(el);
+            const er = new THREE.Mesh(earGeo, mat); er.position.set(12, 35, 0); er.scale.set(1, 2.5, 0.8); group.add(er);
+            
+            const eyeMat = new THREE.MeshBasicMaterial({ color: 0x222222 });
+            if(type === 5) { // 爆弾顔
+                // ＞ ＜ の目
+                const eyeLineMat = new THREE.LineBasicMaterial({color: 0x000000, linewidth: 2});
+                const eyeL = new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(-15,10,26), new THREE.Vector3(-5,5,26), new THREE.Vector3(-15,0,26), new THREE.Vector3(-5,5,26)]), eyeLineMat);
+                group.add(eyeL);
+            } else {
+                const e1 = new THREE.Mesh(new THREE.SphereGeometry(2.5, 8, 8), eyeMat); e1.position.set(-10, 5, 25); group.add(e1);
+                const e2 = new THREE.Mesh(new THREE.SphereGeometry(2.5, 8, 8), eyeMat); e2.position.set(10, 5, 25); group.add(e2);
+            }
+            scene.add(group);
+            return group;
+        }
+
+        function prepareNextMiffy() {
+            if (isGameOver) return;
+            canInput = true;
+            // 確率で鉄(4)や爆弾(5)を出す
+            let type = Math.floor(Math.random() * 4);
+            const rand = Math.random();
+            if(rand < 0.1) type = 4; // 10% 鉄
+            else if(rand < 0.2) type = 5; // 10% 爆弾
+
+            currentMiffy = { visual: createMiffyModel(type), type: type, x: 200, y: 70 };
+            currentMiffy.visual.position.set(currentMiffy.x, WORLD_H - currentMiffy.y, 0);
+        }
+
+        function dropMiffy() {
+            if (!canInput || isGameOver) return;
+            canInput = false;
+            
+            const isIron = currentMiffy.type === 4;
+            const body = Matter.Bodies.circle(currentMiffy.x, currentMiffy.y, 30, {
+                restitution: isIron ? 0.1 : 0.4, 
+                friction: 0.1, 
+                density: isIron ? 0.01 : 0.001, // 鉄は10倍重い
+                label: 'miffy'
+            });
+            body.miffyType = currentMiffy.type;
+            
+            miffies.push({ body, visual: currentMiffy.visual, type: currentMiffy.type });
+            Matter.Composite.add(world, body);
+            currentMiffy = null;
+            setTimeout(prepareNextMiffy, 800);
+        }
+
+        function animate() {
+            if (!isGameOver) {
+                Matter.Engine.update(engine);
+                checkLogic();
+            }
+            miffies.forEach(m => {
+                m.visual.position.x = m.body.position.x;
+                m.visual.position.y = WORLD_H - m.body.position.y;
+                m.visual.rotation.z = -m.body.angle;
+                const s = 1 + Math.min(m.body.speed * 0.01, 0.1);
+                m.visual.scale.set(2-s, s, 1);
+            });
+            renderer.render(scene, camera);
+            requestAnimationFrame(animate);
+        }
+
+        function checkLogic() {
+            let toRemove = new Set();
+            let explode = false;
+
+            miffies.forEach(m1 => {
+                if(m1.type === 4) return; // 鉄は自分からは繋がらない
+                let connected = [m1];
+                let stack = [m1];
+                let visited = new Set([m1.body.id]);
+                while (stack.length > 0) {
+                    let curr = stack.pop();
+                    miffies.forEach(m2 => {
+                        if (!visited.has(m2.body.id) && m1.type === m2.type) {
+                            if (Matter.Vector.magnitude(Matter.Vector.sub(curr.body.position, m2.body.position)) < 75) {
+                                visited.add(m2.body.id); connected.push(m2); stack.push(m2);
+                            }
+                        }
+                    });
+                }
+                if (connected.length >= 3) {
+                    connected.forEach(m => {
+                        toRemove.add(m);
+                        if(m.type === 5) explode = true;
+                    });
+                }
+            });
+
+            if(explode) {
+                // 爆発！周囲のミッフィーを全部消す & 飛ばす
+                const bombPos = Array.from(toRemove).find(m => m.type === 5).body.position;
+                miffies.forEach(m => {
+                    const dist = Matter.Vector.magnitude(Matter.Vector.sub(bombPos, m.body.position));
+                    if(dist < 150) toRemove.add(m);
+                });
+                score += 50;
+            }
+
+            toRemove.forEach(m => {
+                scene.remove(m.visual);
+                Matter.Composite.remove(world, m.body);
+                miffies = miffies.filter(item => item !== m);
+                score += 10;
+            });
+            document.getElementById('score').innerText = score;
+
+            // ゲームオーバー判定
+            miffies.forEach(m => {
+                if (m.body.position.y < BOX_TOP && m.body.speed < 0.1 && !canInput) {
+                    isGameOver = true;
+                    document.getElementById('gameover').style.display = 'block';
+                    document.getElementById('final-score').innerText = "Score: " + score;
+                }
+            });
+        }
+
+        const handleMove = (e) => {
+            if (!canInput || !currentMiffy) return;
+            const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+            const rect = renderer.domElement.getBoundingClientRect();
+            const x = (clientX - rect.left) * (WORLD_W / rect.width);
+            currentMiffy.x = Math.max(70, Math.min(330, x));
+            currentMiffy.visual.position.x = currentMiffy.x;
+        };
+
+        window.addEventListener('mousemove', handleMove);
+        window.addEventListener('touchmove', handleMove);
+        window.addEventListener('mouseup', dropMiffy);
+        window.addEventListener('touchend', dropMiffy);
+
+        prepareNextMiffy();
+        animate();
+    </script>
+</body>
+</html>
