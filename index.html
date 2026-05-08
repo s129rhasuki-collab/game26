@@ -3,28 +3,31 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>ぷにぷにバニー・ボックス</title>
+    <title>ぷにぷにバニー・サバイバル改</title>
     <style>
-        body { margin: 0; overflow: hidden; background: #eceff1; font-family: 'Arial', sans-serif; touch-action: none; }
-        #ui { position: absolute; top: 20px; width: 100%; text-align: center; color: #37474f; pointer-events: none; z-index: 10; }
-        #score { font-size: 50px; font-weight: bold; }
+        body { margin: 0; overflow: hidden; background: #263238; font-family: 'Arial', sans-serif; touch-action: none; }
+        #ui { position: absolute; top: 20px; width: 100%; text-align: center; color: #fff; pointer-events: none; z-index: 10; }
+        #score { font-size: 50px; font-weight: bold; color: #81d4fa; }
+        #timer-bar { width: 200px; height: 10px; background: #555; margin: 10px auto; border-radius: 5px; overflow: hidden; }
+        #timer-fill { width: 100%; height: 100%; background: #ff5252; transition: width 0.1s linear; }
         #gameover { 
             display: none; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
-            background: rgba(255,255,255,0.95); padding: 30px; border-radius: 20px; text-align: center;
-            box-shadow: 0 10px 30px rgba(0,0,0,0.3); z-index: 100; border: 5px solid #81d4fa;
+            background: rgba(0,0,0,0.9); padding: 30px; border-radius: 20px; text-align: center;
+            box-shadow: 0 0 30px #ff5252; z-index: 100; border: 2px solid #ff5252; color: white;
         }
-        button { padding: 12px 24px; font-size: 20px; cursor: pointer; border: none; background: #81d4fa; color: white; border-radius: 10px; font-weight: bold; }
+        button { padding: 12px 24px; font-size: 20px; cursor: pointer; border: none; background: #ff5252; color: white; border-radius: 10px; font-weight: bold; }
     </style>
 </head>
 <body>
     <div id="ui">
         <div id="score">0</div>
-        <div style="font-size: 14px;">グレーは鉄、オレンジは爆弾バニー！</div>
+        <div id="timer-bar"><div id="timer-fill"></div></div>
+        <div style="font-size: 12px; color: #bbb;">爆弾は近くの鉄も消すぞ！5秒で強制落下！</div>
     </div>
     <div id="gameover">
-        <h1>あふれちゃった！</h1>
+        <h1>GAME OVER</h1>
         <p id="final-score"></p>
-        <button onclick="location.reload()">もういちど挑戦</button>
+        <button onclick="location.reload()">再挑戦する</button>
     </div>
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
@@ -32,22 +35,25 @@
 
     <script>
         const WORLD_W = 400;
-        const WORLD_H = 700;
-        const BOX_TOP = 200; 
-        const COLORS = [0xFFF9C4, 0xF8BBD0, 0xB3E5FC, 0xC8E6C9, 0x78909C, 0xFF7043];
+        const WORLD_H = 750;
+        const BOX_W = 260;
+        const BOX_TOP = 250;
+        const COLORS = [0xFFF9C4, 0xF8BBD0, 0xB3E5FC, 0xC8E6C9, 0x90A4AE, 0xFF7043];
         
         let score = 0;
         let isGameOver = false;
         let currentPuni = null;
         let puniList = [];
-        let canInput = true;
+        let canInput = false;
+        let dropTimer = 0;
+        const MAX_DROP_TIME = 5000;
 
         const engine = Matter.Engine.create();
         const world = engine.world;
         
-        const ground = Matter.Bodies.rectangle(200, WORLD_H, 320, 40, { isStatic: true, friction: 0.5 });
-        const leftWall = Matter.Bodies.rectangle(40, 450, 20, 500, { isStatic: true, friction: 0.5 });
-        const rightWall = Matter.Bodies.rectangle(360, 450, 20, 500, { isStatic: true, friction: 0.5 });
+        const ground = Matter.Bodies.rectangle(200, WORLD_H - 50, BOX_W, 40, { isStatic: true, friction: 0.5 });
+        const leftWall = Matter.Bodies.rectangle(200 - BOX_W/2 - 10, 500, 20, 600, { isStatic: true, friction: 0.5 });
+        const rightWall = Matter.Bodies.rectangle(200 + BOX_W/2 + 10, 500, 20, 600, { isStatic: true, friction: 0.5 });
         Matter.Composite.add(world, [ground, leftWall, rightWall]);
 
         const scene = new THREE.Scene();
@@ -56,50 +62,38 @@
         renderer.setSize(window.innerWidth, window.innerHeight);
         document.body.appendChild(renderer.domElement);
 
-        const light = new THREE.DirectionalLight(0xffffff, 1);
-        light.position.set(200, 600, 300);
-        scene.add(light, new THREE.AmbientLight(0xffffff, 0.6));
-        camera.position.set(200, 400, 650);
+        scene.add(new THREE.AmbientLight(0xffffff, 0.7));
+        const light = new THREE.PointLight(0xffffff, 0.8);
+        light.position.set(200, 500, 300);
+        scene.add(light);
+        camera.position.set(200, 400, 750);
         camera.lookAt(200, 350, 0);
 
-        const boxGeo = new THREE.BoxGeometry(320, 500, 100);
-        const boxMat = new THREE.MeshPhongMaterial({ color: 0xffffff, transparent: true, opacity: 0.1, side: THREE.BackSide });
-        const boxV = new THREE.Mesh(boxGeo, boxMat);
-        boxV.position.set(200, WORLD_H - 250 - 20, -10);
+        const boxGeo = new THREE.BoxGeometry(BOX_W, 550, 80);
+        const boxV = new THREE.Mesh(boxGeo, new THREE.MeshPhongMaterial({ color: 0xffffff, transparent: true, opacity: 0.05, side: THREE.BackSide }));
+        boxV.position.set(200, WORLD_H - 325, -10);
         scene.add(boxV);
 
-        const lineGeo = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(40, WORLD_H - BOX_TOP, 10), new THREE.Vector3(360, WORLD_H - BOX_TOP, 10)]);
-        scene.add(new THREE.Line(lineGeo, new THREE.LineBasicMaterial({ color: 0xff4444 })));
+        const lineGeo = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(200 - BOX_W/2, WORLD_H - BOX_TOP, 20), new THREE.Vector3(200 + BOX_W/2, WORLD_H - BOX_TOP, 20)]);
+        scene.add(new THREE.Line(lineGeo, new THREE.LineBasicMaterial({ color: 0xff5252 })));
 
-        function createBunnyModel(type) {
+        function createBunnyModel(type, sizeScale = 1) {
             const group = new THREE.Group();
             const mat = new THREE.MeshPhongMaterial({ color: COLORS[type] });
+            const face = new THREE.Mesh(new THREE.SphereGeometry(30 * sizeScale, 24, 24), mat);
+            face.scale.y = 0.9; group.add(face);
+            const earGeo = new THREE.SphereGeometry(10 * sizeScale, 12, 12);
+            const el = new THREE.Mesh(earGeo, mat); el.position.set(-14 * sizeScale, 35 * sizeScale, 0); el.scale.set(0.9, 2.8, 0.7); group.add(el);
+            const er = new THREE.Mesh(earGeo, mat); er.position.set(14 * sizeScale, 35 * sizeScale, 0); er.scale.set(0.9, 2.8, 0.7); group.add(er);
             
-            // 顔
-            const face = new THREE.Mesh(new THREE.SphereGeometry(30, 24, 24), mat);
-            face.scale.y = 0.9; 
-            group.add(face);
-            
-            // オリジナルの長い耳
-            const earGeo = new THREE.SphereGeometry(10, 12, 12);
-            const el = new THREE.Mesh(earGeo, mat); el.position.set(-14, 35, 0); el.scale.set(0.9, 2.8, 0.7); group.add(el);
-            const er = new THREE.Mesh(earGeo, mat); er.position.set(14, 35, 0); er.scale.set(0.9, 2.8, 0.7); group.add(er);
-            
-            const eyeMat = new THREE.MeshBasicMaterial({ color: 0x222222 });
-            if(type === 5) { // 爆弾顔
-                const eyeLineMat = new THREE.LineBasicMaterial({color: 0x000000, linewidth: 2});
+            const eyeMat = new THREE.MeshBasicMaterial({ color: 0x111111 });
+            if(type === 5) {
+                const eyeLineMat = new THREE.LineBasicMaterial({color: 0x000000});
                 const eyeL = new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(-15,10,26), new THREE.Vector3(-5,5,26), new THREE.Vector3(-15,0,26), new THREE.Vector3(-5,5,26)]), eyeLineMat);
                 group.add(eyeL);
             } else {
-                const e1 = new THREE.Mesh(new THREE.SphereGeometry(3, 8, 8), eyeMat); e1.position.set(-10, 5, 25); group.add(e1);
-                const e2 = new THREE.Mesh(new THREE.SphereGeometry(3, 8, 8), eyeMat); e2.position.set(10, 5, 25); group.add(e2);
-                
-                // かわいい口 (v)
-                const mouthMat = new THREE.LineBasicMaterial({ color: 0x222222 });
-                const mouthGeo = new THREE.BufferGeometry().setFromPoints([
-                    new THREE.Vector3(-4, -5, 26), new THREE.Vector3(0, -8, 26), new THREE.Vector3(4, -5, 26)
-                ]);
-                group.add(new THREE.Line(mouthGeo, mouthMat));
+                const e1 = new THREE.Mesh(new THREE.SphereGeometry(3 * sizeScale, 8, 8), eyeMat); e1.position.set(-10 * sizeScale, 5 * sizeScale, 25 * sizeScale); group.add(e1);
+                const e2 = new THREE.Mesh(new THREE.SphereGeometry(3 * sizeScale, 8, 8), eyeMat); e2.position.set(10 * sizeScale, 5 * sizeScale, 25 * sizeScale); group.add(e2);
             }
             scene.add(group);
             return group;
@@ -107,13 +101,18 @@
 
         function prepareNext() {
             if (isGameOver) return;
+            dropTimer = Date.now();
             canInput = true;
+            
             let type = Math.floor(Math.random() * 4);
+            const ironChance = Math.min(0.1 + (score / 2000), 0.3);
             const rand = Math.random();
-            if(rand < 0.1) type = 4; // 鉄
-            else if(rand < 0.2) type = 5; // 爆弾
+            if(rand < ironChance) type = 4;
+            else if(rand < ironChance + 0.1) type = 5;
 
-            currentPuni = { visual: createBunnyModel(type), type: type, x: 200, y: 70 };
+            const sizeScale = (Math.random() < 0.05 + (score/5000)) ? 1.6 : 1.0;
+
+            currentPuni = { visual: createBunnyModel(type, sizeScale), type: type, x: 200, y: 80, size: 30 * sizeScale };
             currentPuni.visual.position.set(currentPuni.x, WORLD_H - currentPuni.y, 0);
         }
 
@@ -122,31 +121,33 @@
             canInput = false;
             
             const isIron = currentPuni.type === 4;
-            const body = Matter.Bodies.circle(currentPuni.x, currentPuni.y, 30, {
-                restitution: isIron ? 0.1 : 0.4, 
-                friction: 0.1, 
-                density: isIron ? 0.01 : 0.001,
-                label: 'puni'
+            const body = Matter.Bodies.circle(currentPuni.x, currentPuni.y, currentPuni.size, {
+                restitution: isIron ? 0.05 : 0.3, friction: 0.2, 
+                density: isIron ? 0.05 : 0.001, label: 'puni'
             });
             body.puniType = currentPuni.type;
             
-            puniList.push({ body, visual: currentPuni.visual, type: currentPuni.type });
+            puniList.push({ body, visual: currentPuni.visual, type: currentPuni.type, size: currentPuni.size });
             Matter.Composite.add(world, body);
             currentPuni = null;
-            setTimeout(prepareNext, 800);
+            setTimeout(prepareNext, 600);
         }
 
         function animate() {
             if (!isGameOver) {
                 Matter.Engine.update(engine);
                 checkLogic();
+                
+                if(canInput) {
+                    const elapsed = Date.now() - dropTimer;
+                    const remain = Math.max(0, 1 - elapsed / MAX_DROP_TIME);
+                    document.getElementById('timer-fill').style.width = (remain * 100) + "%";
+                    if(elapsed >= MAX_DROP_TIME) drop();
+                }
             }
             puniList.forEach(m => {
-                m.visual.position.x = m.body.position.x;
-                m.visual.position.y = WORLD_H - m.body.position.y;
+                m.visual.position.set(m.body.position.x, WORLD_H - m.body.position.y, 0);
                 m.visual.rotation.z = -m.body.angle;
-                const s = 1 + Math.min(m.body.speed * 0.01, 0.1);
-                m.visual.scale.set(2-s, s, 1);
             });
             renderer.render(scene, camera);
             requestAnimationFrame(animate);
@@ -154,7 +155,7 @@
 
         function checkLogic() {
             let toRemove = new Set();
-            let explode = false;
+            let bombSource = null;
 
             puniList.forEach(p1 => {
                 if(p1.type === 4) return;
@@ -165,7 +166,7 @@
                     let curr = stack.pop();
                     puniList.forEach(p2 => {
                         if (!visited.has(p2.body.id) && p1.type === p2.type) {
-                            if (Matter.Vector.magnitude(Matter.Vector.sub(curr.body.position, p2.body.position)) < 75) {
+                            if (Matter.Vector.magnitude(Matter.Vector.sub(curr.body.position, p2.body.position)) < (p1.size + p2.size) * 1.1) {
                                 visited.add(p2.body.id); connected.push(p2); stack.push(p2);
                             }
                         }
@@ -174,33 +175,39 @@
                 if (connected.length >= 3) {
                     connected.forEach(p => {
                         toRemove.add(p);
-                        if(p.type === 5) explode = true;
+                        if(p.type === 5) bombSource = p;
                     });
                 }
             });
 
-            if(explode) {
-                const bomb = Array.from(toRemove).find(p => p.type === 5);
-                if(bomb) {
-                    const bombPos = bomb.body.position;
-                    puniList.forEach(p => {
-                        const dist = Matter.Vector.magnitude(Matter.Vector.sub(bombPos, p.body.position));
-                        if(dist < 150) toRemove.add(p);
-                    });
-                    score += 50;
-                }
+            if(bombSource) {
+                // 爆発！範囲を100（半分近く）に縮小
+                const EXPLOSION_RADIUS = 100;
+                puniList.forEach(p => {
+                    const forceVec = Matter.Vector.sub(p.body.position, bombSource.body.position);
+                    const dist = Matter.Vector.magnitude(forceVec);
+                    
+                    if(dist < EXPLOSION_RADIUS) {
+                        toRemove.add(p); // 範囲内は消去（鉄含む）
+                    } else if (dist < EXPLOSION_RADIUS * 2) {
+                        // 範囲外は吹き飛ばすだけ（物理の醍醐味！）
+                        const forceMag = (EXPLOSION_RADIUS * 2 - dist) * 0.0002;
+                        Matter.Body.applyForce(p.body, p.body.position, Matter.Vector.mult(Matter.Vector.normalise(forceVec), forceMag));
+                    }
+                });
+                score += 50;
             }
 
             toRemove.forEach(p => {
                 scene.remove(p.visual);
                 Matter.Composite.remove(world, p.body);
                 puniList = puniList.filter(item => item !== p);
-                score += 10;
+                score += 20;
             });
             document.getElementById('score').innerText = score;
 
             puniList.forEach(p => {
-                if (p.body.position.y < BOX_TOP && p.body.speed < 0.1 && !canInput) {
+                if (p.body.position.y < BOX_TOP && p.body.speed < 0.2 && !canInput) {
                     isGameOver = true;
                     document.getElementById('gameover').style.display = 'block';
                     document.getElementById('final-score').innerText = "Score: " + score;
@@ -213,7 +220,7 @@
             const clientX = e.touches ? e.touches[0].clientX : e.clientX;
             const rect = renderer.domElement.getBoundingClientRect();
             const x = (clientX - rect.left) * (WORLD_W / rect.width);
-            currentPuni.x = Math.max(70, Math.min(330, x));
+            currentPuni.x = Math.max(200 - BOX_W/2 + 30, Math.min(200 + BOX_W/2 - 30, x));
             currentPuni.visual.position.x = currentPuni.x;
         };
 
